@@ -24,13 +24,8 @@ impl Pack for Escrow {
     const LEN: usize = 105;
     fn unpack_from_slice(src: &[u8]) -> Result<Self, ProgramError> {
         let src = array_ref![src, 0, Escrow::LEN];
-        let (
-            is_initialized,
-            seller_pubkey,
-            token_account_pubkey,
-            mint_key,
-            expected_amount,
-        ) = array_refs![src, 1, 32, 32, 32, 8];
+        let (is_initialized, seller_pubkey, token_account_pubkey, mint_key, expected_amount) =
+            array_refs![src, 1, 32, 32, 32, 8];
         let is_initialized = match is_initialized {
             [0] => false,
             [1] => true,
@@ -40,9 +35,7 @@ impl Pack for Escrow {
             is_initialized,
             seller_pubkey: Pubkey::new_from_array(*seller_pubkey),
             token_account_pubkey: Pubkey::new_from_array(*token_account_pubkey),
-            mint_key: Pubkey::new_from_array(
-                *mint_key,
-            ),
+            mint_key: Pubkey::new_from_array(*mint_key),
             expected_amount: u64::from_le_bytes(*expected_amount),
         })
     }
@@ -87,11 +80,7 @@ impl Pack for ValAccounts {
     const LEN: usize = 41;
     fn unpack_from_slice(src: &[u8]) -> Result<Self, ProgramError> {
         let src = array_ref![src, 0, ValAccounts::LEN];
-        let (
-            is_initialized,
-            val_treasury,
-            base_percentage,
-        ) = array_refs![src, 1, 32, 8];
+        let (is_initialized, val_treasury, base_percentage) = array_refs![src, 1, 32, 8];
         let is_initialized = match is_initialized {
             [0] => false,
             [1] => true,
@@ -101,17 +90,13 @@ impl Pack for ValAccounts {
             is_initialized,
             val_treasury: Pubkey::new_from_array(*val_treasury),
             base_percentage: u64::from_le_bytes(*base_percentage),
-
         })
     }
 
     fn pack_into_slice(&self, dst: &mut [u8]) {
         let dst = array_mut_ref![dst, 0, ValAccounts::LEN];
-        let (
-            is_initialized_dst,
-            val_treasury_dst,
-            base_percentage_dst,
-        ) = mut_array_refs![dst, 1, 32, 8];
+        let (is_initialized_dst, val_treasury_dst, base_percentage_dst) =
+            mut_array_refs![dst, 1, 32, 8];
         let ValAccounts {
             is_initialized,
             val_treasury,
@@ -120,6 +105,5 @@ impl Pack for ValAccounts {
         is_initialized_dst[0] = *is_initialized as u8;
         val_treasury_dst.copy_from_slice(val_treasury.as_ref());
         *base_percentage_dst = base_percentage.to_le_bytes();
-
     }
 }

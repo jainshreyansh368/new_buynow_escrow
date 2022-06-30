@@ -6,15 +6,17 @@ use solana_program::{
     program_error::ProgramError,
     program_pack::{IsInitialized, Pack},
     pubkey::Pubkey,
+    system_instruction::create_account,
     sysvar::{rent::Rent, Sysvar},
-    system_instruction::{transfer, create_account},
-
 };
 
+use crate::{
+    instruction::EscrowInstruction,
+    state::{Escrow, ValAccounts},
+};
 use metaplex_token_metadata::state::Metadata;
+use spl_token::{instruction::transfer, state::Account as TokenAccount};
 use std::str::FromStr;
-use spl_token::state::Account as TokenAccount;
-use crate::{ instruction::EscrowInstruction, state::{Escrow , ValAccounts} };
 pub struct Processor;
 impl Processor {
     pub fn process(
@@ -38,16 +40,13 @@ impl Processor {
                 msg!("Instruction: Cancel");
                 Self::process_cancel(accounts, program_id)
             }
-            EscrowInstruction::UpdateValAccount { amount } => {
-                msg!("Instruction: Update valhalla accounts");
+            EscrowInstruction::UpdatePlatformAccount { amount } => {
+                msg!("Instruction: Update platfrom accounts");
                 Self::process_val_accounts(accounts, amount, program_id)
             }
         }
     }
 
-
-
-    
     pub fn process_init_escrow(
         accounts: &[AccountInfo],
         amount: u64,
@@ -59,10 +58,10 @@ impl Processor {
         if !initializer.is_signer {
             return Err(ProgramError::MissingRequiredSignature);
         }
-        let token_account =     (account_info_iter)?;
+        let token_account = next_account_info(account_info_iter)?;
 
         let mint_key = next_account_info(account_info_iter)?;
-        
+
         let escrow_account = next_account_info(account_info_iter)?;
 
         let rent = &Rent::from_account_info(next_account_info(account_info_iter)?)?;
@@ -71,37 +70,32 @@ impl Processor {
 
         let system_program = next_account_info(account_info_iter)?;
 
-
         // mint validation check
         if *mint_key.owner != spl_token::id() {
             return Err(ProgramError::IncorrectProgramId);
         }
-        
-        let token_account_state = spl_token::state::Account::unpack(
-            &**token_account.data.borrow()
-        ).unwrap();
+
+        let token_account_state =
+            spl_token::state::Account::unpack(&**token_account.data.borrow()).unwrap();
 
         // check if the token account have balance
-        if token_account_state.amount != (1 as u64){
+        if token_account_state.amount != (1 as u64) {
             msg!("invalid NFT data ** ..");
             return Err(ProgramError::InvalidAccountData);
         }
         // validate token account using mint
-        if token_account_state.mint != *mint_key.key{
+        if token_account_state.mint != *mint_key.key {
             msg!("invalid NFT data ** ..");
             return Err(ProgramError::InvalidAccountData);
         }
-        
+
         invoke(
             &create_account(
-                initializer.key, 
-                escrow_account.key, 
-                Rent::default().
-                minimum_balance(
-                    Escrow::LEN 
-                ),
-                Escrow::LEN as u64, 
-                program_id,   
+                initializer.key,
+                escrow_account.key,
+                Rent::default().minimum_balance(Escrow::LEN),
+                Escrow::LEN as u64,
+                program_id,
             ),
             &[
                 initializer.clone(),
@@ -109,7 +103,6 @@ impl Processor {
                 system_program.clone(),
             ],
         )?;
-    
 
         // check listing amount > 0
         if amount <= (0 as u64) {
@@ -117,7 +110,6 @@ impl Processor {
         }
 
         let mut escrow_info = Escrow::unpack_unchecked(&escrow_account.try_borrow_data()?)?;
-
 
         // set the state for escrow account
         escrow_info.is_initialized = true;
@@ -150,24 +142,22 @@ impl Processor {
         Ok(())
     }
 
-    
     pub fn process_exchange(
         accounts: &[AccountInfo],
         amount_expected_by_taker: u64,
         program_id: &Pubkey,
     ) -> ProgramResult {
-
+        msg!("enter");
         let account_info_iter = &mut accounts.iter();
         let taker = next_account_info(account_info_iter)?;
+        let taker_token_account = next_account_info(account_info_iter)?;
 
         // check if the buyer is the singer for this instruction
         if !taker.is_signer {
             return Err(ProgramError::MissingRequiredSignature);
         }
-        //let takers_token_to_receive_account = next_account_info(account_info_iter)?;
         let pdas_token_account = next_account_info(account_info_iter)?;
-        let pdas_token_account_info =
-            TokenAccount::unpack(&pdas_token_account.try_borrow_data()?)?;
+        let pdas_token_account_info = TokenAccount::unpack(&pdas_token_account.try_borrow_data()?)?;
         let (pda, nonce) = Pubkey::find_program_address(&[b"escrow"], program_id);
 
         // validation check for amount
@@ -176,11 +166,15 @@ impl Processor {
         }
 
         let initializers_main_account = next_account_info(account_info_iter)?;
+        let seller_token_account = next_account_info(account_info_iter)?;
+
         let mint_key = next_account_info(account_info_iter)?;
         let escrow_account = next_account_info(account_info_iter)?;
 
+        msg!("1");
         // check if owner of escrow account is the program
         if escrow_account.owner != program_id {
+            msg!("0000");
             return Err(ProgramError::IncorrectProgramId);
         }
         let escrow_info = Escrow::unpack(&escrow_account.try_borrow_data()?)?;
@@ -200,46 +194,45 @@ impl Processor {
         }
 
         let amomunt_expected_by_user = escrow_info.expected_amount.clone();
+
         let token_program = next_account_info(account_info_iter)?;
         let system_program = next_account_info(account_info_iter)?;
         let pda_account = next_account_info(account_info_iter)?;
         let metadata_info = next_account_info(account_info_iter)?;
 
-        // valhalla state account for valAccount struct
+        //  state account for valAccount struct
         let val_acc = next_account_info(account_info_iter)?;
 
-        // check if owner of valhalla account is the program
+        // check if owner of platfrom account is the program
         if *val_acc.owner != *program_id {
             return Err(ProgramError::IncorrectProgramId);
         }
 
-        // valhalla team and treasury accounts
-        let valhalla_treasury = next_account_info(account_info_iter)?;
+        // platfrom team and treasury accounts
+        let treasury_token_account = next_account_info(account_info_iter)?;
 
-        // get the percentages from the valhalla state account
+        // get the percentages from the platfrom state account
         let val_acccount_info = ValAccounts::unpack(&val_acc.try_borrow_data()?)?;
 
-        // validation checks for treasury and team accounts
-        if val_acccount_info.val_treasury != *valhalla_treasury.key {
-            return Err(ProgramError::InvalidAccountData);
-        }
+        let solg_token_mint =
+            Pubkey::from_str("Dy1qheKrGKxYxm8yZhxrjrp9idQeNpsoNYwJgrt1VFmL").unwrap();
 
-
-        // fetch onchain metadata account 
+        // fetch onchain metadata account
         const PREFIX: &str = "metadata";
-        let metadata_program_id = Pubkey::from_str("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s").unwrap();
+        let metadata_program_id =
+            Pubkey::from_str("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s").unwrap();
         // seeds for metadata pda
         let metadata_seeds = &[
             PREFIX.as_bytes(),
             metadata_program_id.as_ref(),
             escrow_info.mint_key.as_ref(),
         ];
-    
+
         let (metadata_key, _metadata_bump_seed) =
             Pubkey::find_program_address(metadata_seeds, &metadata_program_id);
 
         // validation check for correct accounts send from the client side
-        if *metadata_info.key != metadata_key{
+        if *metadata_info.key != metadata_key {
             return Err(ProgramError::InvalidAccountData);
         }
 
@@ -250,36 +243,50 @@ impl Processor {
 
         // seller fee basis points from the metadata
         let fees = metadata.data.seller_fee_basis_points;
-        let total_fee = ((fees as u64)*size)/10000;
+        let total_fee = ((fees as u64) * size) / 10000;
 
         let mut remaining_fee = size;
         match metadata.data.creators {
             Some(creators) => {
                 for creator in creators {
                     let pct = creator.share as u64;
-                    let creator_fee = (pct*(total_fee))/100;
+                    let creator_fee = (pct * (total_fee)) / 100;
                     remaining_fee = remaining_fee - creator_fee;
 
-                    let creator_acc_web = next_account_info(account_info_iter)?;
+                    let creator_token_account = next_account_info(account_info_iter)?;
 
-                    if *creator_acc_web.key != creator.address {
+                    // if *creator_acc_web.key != creator.address {
+                    //     return Err(ProgramError::InvalidAccountData);
+                    // }
+
+                    // ATA for creators
+                    let creator_ata = spl_associated_token_account::get_associated_token_address(
+                        &creator.address,
+                        &solg_token_mint,
+                    );
+
+                    if *creator_token_account.key != creator_ata {
                         return Err(ProgramError::InvalidAccountData);
                     }
 
                     // send the royalties to the creators of the NFT
                     if creator_fee > 0 {
-
+                        let transfer_token = transfer(
+                            token_program.key,
+                            taker_token_account.key,
+                            creator_token_account.key,
+                            taker.key,
+                            &[],
+                            creator_fee.clone(),
+                        )?;
+                        msg!("Calling the token program to transfer raoyalty to creators...");
                         invoke(
-                            &transfer(
-                                taker.key,
-                                creator_acc_web.key,
-                                creator_fee,   
-                            ),
+                            &transfer_token,
                             &[
+                                taker_token_account.clone(),
+                                creator_token_account.clone(),
                                 taker.clone(),
-                                creator_acc_web.clone(),
-                                taker.clone(),
-                                system_program.clone(),
+                                token_program.clone(),
                             ],
                         )?;
                     }
@@ -290,44 +297,49 @@ impl Processor {
             }
         }
 
-        // get valhalla treasury + team % and convert it to SOL according
         // to the sale amount of the NFT
         let base_percentge = val_acccount_info.base_percentage;
 
         let platform_fee = (size * val_acccount_info.base_percentage) / 10000;
 
-        // transer SOL to platform fee account
-        invoke(
-            &transfer(
+        let transfer_token = transfer(
+            token_program.key,
+            taker_token_account.key,
+            treasury_token_account.key,
             taker.key,
-            valhalla_treasury.key,
-            platform_fee.clone(),   
-            ),
+            &[],
+            platform_fee.clone(),
+        )?;
+        msg!("Calling the token program to transfer fees to treasury acc...");
+        invoke(
+            &transfer_token,
             &[
+                taker_token_account.clone(),
+                treasury_token_account.clone(),
                 taker.clone(),
-                valhalla_treasury.clone(),
-                taker.clone(),
-                system_program.clone(),
+                token_program.clone(),
             ],
         )?;
 
         // calculate the remaining amount
         remaining_fee = remaining_fee - platform_fee;
 
-        // transfer the remaining SOL to the seller
-        let transfer_to_initializer_ix = transfer(
+        let transfer_token = transfer(
+            token_program.key,
+            taker_token_account.key,
+            seller_token_account.key,
             taker.key,
-            initializers_main_account.key,
-            remaining_fee,   
-        );
-
+            &[],
+            remaining_fee.clone(),
+        )?;
+        msg!("Calling the token program to transfer LP tokens pdatoken account...");
         invoke(
-            &transfer_to_initializer_ix,
+            &transfer_token,
             &[
+                taker_token_account.clone(),
+                seller_token_account.clone(),
                 taker.clone(),
-                initializers_main_account.clone(),
-                taker.clone(),
-                system_program.clone(),
+                token_program.clone(),
             ],
         )?;
 
@@ -355,20 +367,16 @@ impl Processor {
         let mut escrow_update_info = Escrow::unpack_unchecked(&escrow_account.try_borrow_data()?)?;
 
         escrow_update_info.is_initialized = false;
-        escrow_update_info.seller_pubkey = *initializers_main_account.key;
-        escrow_update_info.token_account_pubkey = *pdas_token_account.key;
-        escrow_update_info.mint_key = *mint_key.key;
-        escrow_update_info.expected_amount = amomunt_expected_by_user;
-        Escrow::pack(escrow_update_info, &mut escrow_account.try_borrow_mut_data()?)?;
+
+        Escrow::pack(
+            escrow_update_info,
+            &mut escrow_account.try_borrow_mut_data()?,
+        )?;
 
         Ok(())
     }
 
-
-    pub fn process_cancel(
-        accounts:&[AccountInfo],
-        program_id: &Pubkey,
-    ) -> ProgramResult {
+    pub fn process_cancel(accounts: &[AccountInfo], program_id: &Pubkey) -> ProgramResult {
         let account_info_iter = &mut accounts.iter();
         let user = next_account_info(account_info_iter)?;
         let pdas_token_account = next_account_info(account_info_iter)?;
@@ -423,31 +431,33 @@ impl Processor {
 
         escrow_update_info.is_initialized = false;
 
-        Escrow::pack(escrow_update_info, &mut escrow_account.try_borrow_mut_data()?)?;
+        Escrow::pack(
+            escrow_update_info,
+            &mut escrow_account.try_borrow_mut_data()?,
+        )?;
 
         Ok(())
     }
 
     pub fn process_val_accounts(
-        accounts:&[AccountInfo],
+        accounts: &[AccountInfo],
         amount: u64,
         program_id: &Pubkey,
     ) -> ProgramResult {
-
         msg!("fees percent {:?}", amount);
 
-
-        //update authority of valhalla
-        let admin_update_auth = Pubkey::from_str("3rBu3qAJ3MWBobPPtnNSrZbv3jiAVcpoXkerwY7m8H7f").unwrap();
+        //update authority of platfrom
+        let admin_update_auth =
+            Pubkey::from_str("J7A8AeFaPNxe3w7jCxnE2xHVWZz2GgjAF9LWky5AG2Jq").unwrap();
         let account_info_iter = &mut accounts.iter();
         let user = next_account_info(account_info_iter)?;
 
         // validation check if the user calling this instruction
-        // actually holds the authority for updating the valhalla account
+        // actually holds the authority for updating the platfrom account
         if admin_update_auth != *user.key {
             msg!("wrong update auth.....");
             return Err(ProgramError::InvalidAccountData);
-        }        
+        }
 
         let platfrom_account = next_account_info(account_info_iter)?;
 
@@ -463,9 +473,9 @@ impl Processor {
             return Err(ProgramError::InvalidInstructionData);
         }
 
-
         // unpack the platfrom_account state, to store data into
-        let mut account_update_info = ValAccounts::unpack_unchecked(&platfrom_account.try_borrow_data()?)?;
+        let mut account_update_info =
+            ValAccounts::unpack_unchecked(&platfrom_account.try_borrow_data()?)?;
 
         account_update_info.is_initialized = true;
         account_update_info.val_treasury = *treasury_acc.key;
@@ -473,8 +483,11 @@ impl Processor {
 
         msg!("fee percentage : {:?}", account_update_info.base_percentage);
 
-        // pack data into the valhalla account
-        ValAccounts::pack(account_update_info, &mut platfrom_account.try_borrow_mut_data()?)?;
+        // pack data into the platfrom account
+        ValAccounts::pack(
+            account_update_info,
+            &mut platfrom_account.try_borrow_mut_data()?,
+        )?;
 
         Ok(())
     }
